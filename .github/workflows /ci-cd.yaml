@@ -1,0 +1,66 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build_and_deploy:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - context: approval/client
+            app_name: approval-client-app
+          - context: approval/server
+            app_name: approval-server-app
+          - context: dashboard/client
+            app_name: dashboard-client-app
+          - context: dashboard/server
+            app_name: dashboard-server-app
+
+    steps:
+    - uses: actions/checkout@v2
+
+    - name: Azure Login
+      uses: azure/login@v1
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v1
+
+    - name: Cache Docker layers
+      uses: actions/cache@v2
+      with:
+        path: /tmp/.buildx-cache
+        key: ${{ runner.os }}-buildx-${{ github.sha }}
+        restore-keys: |
+          ${{ runner.os }}-buildx-
+
+    - name: Build and push Docker image
+      uses: docker/build-push-action@v2
+      with:
+        context: ${{ matrix.context }}
+        file: ${{ matrix.context }}/Dockerfile
+        push: true
+        tags: youracr.azurecr.io/${{ matrix.app_name }}:${{ github.sha }}
+        build-args: |
+          BUILDKIT_INLINE_CACHE=1
+        cache-from: type=local,src=/tmp/.buildx-cache
+        cache-to: type=local,dest=/tmp/.buildx-cache
+
+    - name: Deploy to Azure Container App
+      run: |
+        az containerapp update \
+          --name ${{ matrix.app_name }} \
+          --resource-group yourResourceGroup \
+          --image youracr.azurecr.io/${{ matrix.app_name }}:${{ github.sha }}
+        az containerapp restart --name ${{ matrix.app_name }} --resource-group yourResourceGroup
+      env:
+        AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
+
